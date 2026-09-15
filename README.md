@@ -25,7 +25,8 @@ not a mock-up. [Still screenshot](docs/screenshot.png).</sub>
   is refused on the send path, not just hidden in the UI.
 - **Themed throughout.** Six shader backdrops, ten particle effects,
   four card styles, your own fonts and cue sounds, and every panel section
-  switchable.
+  switchable — with text contrast guaranteed against whatever theme you
+  land on, rather than left to a slider.
 - Click-through toasts that report a finished print *over* a fullscreen
   game.
 

@@ -155,6 +155,21 @@ noticeably larger, so it is scaled to 0.88 to keep card layouts intact.
 ImGui has no letter-spacing. They are three to seven characters each, and the
 tracking is most of what separates a laid-out panel from a stack of default text.
 
+### Contrast is guaranteed, not configured
+
+Every text role is checked against the lightest ground the theme defines and
+pushed away from it until it clears WCAG — 7:1 for anything carrying a
+sentence, 4.5:1 for labels and metadata — at theme-build time, by binary
+search on a blend toward whichever pole the ground is not. A light theme
+gets darker text rather than brighter, and a role that already passes is
+left alone.
+
+This is not a slider. All three shipped themes were failing before it
+(`text_mute` between 1.77:1 and 2.11:1, against a 4.5:1 floor), and the
+readability wash could not reach the problem because the problem was the
+type, not the ground. Measured on rendered frames afterwards: 0 of 13 text
+bands below the floor on every backdrop at the default wash, median 8.63:1.
+
 ---
 
 ## 5. The 3D toolpath view
@@ -296,6 +311,7 @@ something open beside you for nine hours.
 | Theme | presets, accent colour + custom, text size, density, corner radius, panel radius, border width |
 | Type | interface face, readouts face, terminal face |
 | Backdrop | scene, brightness, speed, readability |
+| Contrast | none — the text ramp is guaranteed against the theme automatically, not dialled |
 | Effects | effect, intensity, over-panels, panel opacity |
 | 3D view | feature filters ×7, cutaway, detail, extrusion width, depth fade, base opacity, ghost opacity, nozzle size, model colour, bed outline |
 | Panel | card style, shadow, 5 section toggles, side-panel width, terminal height, graph height |

@@ -1,3 +1,3 @@
 """Bedside - a custom OctoPrint desktop client built on VertexUI."""
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"

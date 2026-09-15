@@ -1046,6 +1046,87 @@ The rule this leaves behind: `accent` is for shapes, fills, and text you
 could delete without losing information. Anything the user has to *read* to
 make a decision is `text` or `text_dim`.
 
+### …and the rest of the palette was failing too
+
+Fixing the dialog prompted the obvious question, and the answer was worse
+than the dialog. Rendering the settings screen and reading the pixels back:
+
+| | bands below 4.5:1 | median | worst |
+| --- | --- | --- | --- |
+| backdrop **off**, wash off | 5 of 13 | 5.19:1 | 2.59:1 |
+| grid backdrop, wash at the 0.72 default | 5 of 13 | 5.19:1 | 2.59:1 |
+| aurora backdrop, wash off | 3 of 8 | 4.64:1 | 2.35:1 |
+
+The first two rows are the finding. **Turning the backdrop off entirely
+changed nothing**, and turning the readability wash up to its default
+changed nothing either — the ground was already dark, measured at
+L=0.0034, and flattening a dark ground flatter does not help type that is
+too dim to begin with. The wash had been asked to fix a palette problem it
+could not reach, which is exactly how it felt to use.
+
+The palette itself, against the lightest ground text lands on
+(`surface_hover` `#212127`):
+
+| role | noir-red | noir-blue | slate-lime |
+| --- | --- | --- | --- |
+| `text_mute` | 2.11:1 | 2.11:1 | 1.77:1 |
+| `text_dim` | 4.23:1 | 4.23:1 | 3.54:1 |
+
+Every shipped theme, failing. `text_mute` carries 57 uses in `app.py`
+alone — every micro-label, every metadata line, every settings blurb.
+
+#### The fix is derived, not dialled
+
+Hard-coding replacement greys would be right for exactly these three
+themes and wrong the moment anyone saved a custom one. So `readable(t)`
+takes a theme and pushes each text role away from the ground until it
+clears a target — 7:1 for anything carrying a sentence, 4.5:1 for labels
+and metadata — by binary search on a blend toward whichever pole the
+ground is not. A light theme therefore gets *darker* text, not brighter,
+and a role that already passes is returned untouched so a
+well-designed theme is never repainted.
+
+It runs in `_apply_theme` and at `vui.install`, so it covers the startup
+theme, every settings change, and any preset loaded later.
+
+| | before | after |
+| --- | --- | --- |
+| `text_mute` | `#53535F` 2.11:1 | `#87878F` 4.50:1 |
+| `text_dim` | `#828290` 4.23:1 | `#ABABB4` 7.00:1 |
+| `danger` | `#E54355` 4.01:1 | `#E75565` 4.50:1 |
+
+Re-measured on rendered frames, counting only bands whose brightest pixel
+is actually one of the theme's text colours — scoring the backdrop or the
+panel miniature as failed text makes the number meaningless in both
+directions:
+
+| scene | before | after |
+| --- | --- | --- |
+| none | 5 fail, median 5.19 | **0 fail**, median 8.63 |
+| grid @ 0.72 | 5 fail | **0 fail**, median 8.63 |
+| nebula @ 0.72 | 4 fail | **0 fail**, median 8.62 |
+| plasma | 4 fail | **0 fail**, median 8.44 |
+| aurora, wash off | 3 fail | 1 fail, median 6.61 |
+
+The one residual is a bright scene with the wash turned off, which is the
+narrow job the wash should have had all along — and now does, instead of
+standing in for a palette that did not clear the floor.
+
+#### Two ways the measurement lied first
+
+Worth recording, because both flattered and then damned the result:
+
+1. **The harness built its own theme.** It called `vui.install` with a bare
+   `build_theme()` and never set `post_init`, so it was rendering a theme
+   the app never shows — the fix landed and the numbers did not move at
+   all. The harness now mirrors `main()` exactly.
+2. **The 97th percentile is not a glyph.** A short label is mostly empty
+   space, so the 97th percentile of its band lands on an anti-aliased edge
+   and reports roughly half the real contrast. Six bands looked like
+   failures until the estimator was changed to the glyph core; probing
+   their brightest pixels returned `#ABABB4` and `#87878F`, the correctly
+   lifted colours.
+
 ### A disabled icon button, where there isn't one
 
 `widgets.icon_button` has no disabled state, and the first version simply
