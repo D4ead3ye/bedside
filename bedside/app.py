@@ -20,7 +20,7 @@ from vertexui import anim, fonts, icons, logview, settings as vsettings
 from vertexui import sound, theme as theme_mod, widgets
 
 from . import (__version__, bg as bgmod, effects, files as filestore,
-               gcode, pick, picons, sounds)
+               gcode, pick, picons, sounds, themes)  # noqa: F401
 from .client import (OctoClient, classify_line, is_motion_command,
                      normalise_host)
 from .gcode import Loader
@@ -289,6 +289,12 @@ _TEXT_TARGETS = {
     "warn": 4.5,
     "ok": 4.5,
     "info": 4.5,
+    # `accent` itself is deliberately NOT here: it is the brand colour for
+    # fills, and lifting it would repaint every button to satisfy a rule
+    # about text. `accent_bright` is the one that may be read, so it is the
+    # one that has to clear the floor — which matters most on a theme whose
+    # accent is dark enough that the pair are far apart.
+    "accent_bright": 4.5,
 }
 
 _WHITE = ImVec4(1.0, 1.0, 1.0, 1.0)
@@ -353,6 +359,56 @@ def readable(t):
     fixed = {role: lift(getattr(t, role), ground, target)
              for role, target in _TEXT_TARGETS.items()}
     return replace(t, **fixed)
+
+
+NOTE_RULE = 2.0
+NOTE_PAD = 11.0
+
+
+def note(text, tone=None):
+    """A help line that reads as belonging to the control above it.
+
+    Loose prose is the settings-screen failure mode: it sits at the same
+    indent as the label, in a colour not far off a value, with nothing
+    saying which control it explains — so the eye has to re-read the
+    paragraph to find out what it is attached to.
+
+    A rule down the left edge over a recessed ground binds it to what
+    precedes it. Recessed and not raised on purpose: this is subordinate
+    to the control above, and a ground *darker* than the panel also keeps
+    `readable()`'s guarantee intact, where a lighter one would quietly
+    invalidate the reference it measures against.
+
+    It also wraps. The calls this replaces did not, so long copy had to be
+    hand-split into string literals sized by eye against one window width,
+    and overran the panel at any other.
+    """
+    t = theme_mod.current()
+    dl = imgui.get_window_draw_list()
+    w = max(160.0, imgui.get_content_region_avail().x - 4.0)
+    inner = w - NOTE_RULE - NOTE_PAD * 2
+    h = imgui.calc_text_size(text, wrap_width=inner).y + 12.0
+    p = imgui.get_cursor_screen_pos()
+    dl.add_rect_filled(
+        ImVec2(p.x, p.y), ImVec2(p.x + w, p.y + h),
+        imgui.get_color_u32(theme_mod.with_alpha(t.bg, 0.85)), t.rounding)
+    dl.add_rect(
+        ImVec2(p.x, p.y), ImVec2(p.x + w, p.y + h),
+        imgui.get_color_u32(theme_mod.with_alpha(t.border, 0.55)),
+        t.rounding, 1.0)
+    # accent_bright, not accent: a theme is free to choose an accent that
+    # is 1.16:1 against this ground, and a rule nobody can see is not a
+    # rule. The bright variant is the one readable() guarantees.
+    dl.add_rect_filled(
+        ImVec2(p.x, p.y + 2.0), ImVec2(p.x + NOTE_RULE, p.y + h - 2.0),
+        imgui.get_color_u32(theme_mod.with_alpha(
+            tone or t.accent_bright, 0.85)), 1.0)
+    imgui.set_cursor_screen_pos(ImVec2(p.x + NOTE_RULE + NOTE_PAD, p.y + 6.0))
+    imgui.push_text_wrap_pos(imgui.get_cursor_pos().x + inner)
+    imgui.text_colored(t.text_dim, text)
+    imgui.pop_text_wrap_pos()
+    imgui.set_cursor_screen_pos(ImVec2(p.x, p.y + h + 5.0))
+    imgui.dummy(ImVec2(w, 0))
 
 
 def scrim(dl, x, y, w, h, t, amount, rounding=0.0):
@@ -1556,7 +1612,6 @@ class App:
     def _sec_font(self):
         if not self._group("FONT"):
             return
-        t = theme_mod.current()
         ui_names, mono_names = list(UI_FACES), list(MONO_FACES)
         cur_ui = self._pref("face_ui", ui_names[0])
         cur_mono = self._pref("face_mono", mono_names[0])
@@ -1577,15 +1632,13 @@ class App:
         if nj != j:
             self.st.extras["face_mono"] = mono_names[nj]
             self._dirty = True
-        imgui.text_colored(t.text_mute,
-                           "fonts are baked into the atlas at startup — "
-                           "restart to apply")
+        note("fonts are baked into the atlas at startup — restart to "
+             "apply")
         imgui.dummy(ImVec2(0, 6))
 
     def _sec_sound(self):
         if not self._group("SOUND"):
             return
-        t = theme_mod.current()
         st = self.st
         on = widgets.checkbox("interface sounds", st.sounds, key="snd")
         if on != st.sounds:
@@ -1614,10 +1667,9 @@ class App:
         if names[ni] == sounds.CUSTOM_SET:
             self._sec_sound_files()
         else:
-            imgui.text_colored(t.text_mute,
-                               "breeze is filtered noise rather than tones — "
-                               "no onset to flinch at when a nine-hour print "
-                               "is running beside you")
+            note("breeze is filtered noise rather than tones — no onset "
+                 "to flinch at when a nine-hour print is running beside "
+                 "you")
         imgui.dummy(ImVec2(0, 6))
 
     def _sec_sound_files(self):
@@ -1668,11 +1720,9 @@ class App:
             imgui.text_colored(
                 t.danger,
                 "unreadable: " + ", ".join(f"{k}.wav" for k in sorted(bad)))
-        imgui.text_colored(t.text_mute,
-                           "drop 16-bit .wav files named hover / click / ok / "
-                           "warn / error; any missing one keeps its breeze "
-                           "cue, and the volume slider scales yours (full at "
-                           "0.60)")
+        note("drop 16-bit .wav files named hover / click / ok / warn / "
+             "error; any missing one keeps its breeze cue, and the volume "
+             "slider scales yours (full at 0.60)")
 
     def _sec_log(self):
         if not self._group("TERMINAL"):
@@ -1694,21 +1744,18 @@ class App:
             imgui.same_line()
         imgui.new_line()
 
-        t = theme_mod.current()
         fol = widgets.checkbox("auto-scroll (follow)", self.log.follow,
                                key="setfollow")
         if fol != self.log.follow:
             self.log.follow = fol
-        imgui.text_colored(t.text_mute,
-                           "show routine traffic — all hidden by default, "
-                           "because during a print it is ~99% of the lines:")
+        note("show routine traffic — all hidden by default, because "
+             "during a print it is ~99% of the lines")
         for label, cls in LOG_LABELS:
             self._check_pref(label, LOG_KEYS[cls], False)
             imgui.same_line()
         imgui.new_line()
-        imgui.text_colored(t.text_mute,
-                           "errors, unknown commands and \"busy: paused for "
-                           "user\" are never filtered")
+        note("errors, unknown commands and \"busy: paused for user\" are "
+             "never filtered")
         imgui.dummy(ImVec2(0, 6))
 
     _PREVIEW_SYNC = ("line_mm", "fade", "ghost", "floor_alpha", "show_bed",
@@ -1717,7 +1764,6 @@ class App:
 
     def _sec_view_preview(self):
         self._group("preview")
-        t = theme_mod.current()
         p, v = self.preview, self.view
         if p._tp is None:
             p.set_toolpath(sample_toolpath())
@@ -1743,10 +1789,8 @@ class App:
 
         w = min(imgui.get_content_region_avail().x, 520.0)
         p.draw(ImVec2(w, 250.0), frac * n, live=True)
-        imgui.text_colored(t.text_mute,
-                           "a sample model with your current settings — "
-                           "drag to orbit, right-drag to pan, wheel to "
-                           "zoom, double-click to reset")
+        note("a sample model with your current settings — drag to orbit, "
+             "right-drag to pan, wheel to zoom, double-click to reset")
         imgui.dummy(ImVec2(0, 8))
 
     def _sec_view_show(self):
@@ -1895,22 +1939,18 @@ class App:
                           apply=lambda x: setattr(self, "scrim", x))
         if self.bg.error:
             imgui.text_colored(t.danger, self.bg.error[:160])
-        imgui.text_colored(t.text_mute,
-                           "a fragment shader over the whole window, drawn "
-                           "at half resolution and tinted from your accent "
-                           "— it holds the app at full frame rate, same as "
-                           "the particles")
-        imgui.text_colored(t.text_mute,
-                           "readability washes the background back in behind "
-                           "bare text. Text contrast itself is guaranteed "
-                           "against the theme, so leave this alone unless a "
-                           "bright scene is showing through")
+        note("a fragment shader over the whole window, drawn at half "
+             "resolution and tinted from your accent — it holds the app at "
+             "full frame rate, same as the particles")
+        note("readability washes the background back in behind bare "
+             "text. Text contrast itself is guaranteed against the theme, "
+             "so leave this alone unless a bright scene is showing "
+             "through")
         imgui.dummy(ImVec2(0, 6))
 
     def _sec_effects(self):
         if not self._group("BACKGROUND EFFECT"):
             return
-        t = theme_mod.current()
         cur = self._pref("effect", "none")
         per_row = 4
         for i, name in enumerate(effects.NAMES):
@@ -1933,14 +1973,11 @@ class App:
                           apply=lambda x: setattr(self, "fx_over", x))
         self._slider_pref("panel opacity", "panel_alpha", 1.0, 0.35, 1.0,
                           "%.2f")
-        imgui.text_colored(t.text_mute,
-                           "\"over panels\" repaints the same particles on "
-                           "top of the UI; panel opacity lets them show "
-                           "through it as well")
+        note("\"over panels\" repaints the same particles on top of the "
+             "UI; panel opacity lets them show through it as well")
         if cur != "none":
-            imgui.text_colored(t.text_mute,
-                               "an animated background holds the app at full "
-                               "frame rate — it will not idle")
+            note("an animated background holds the app at full frame "
+                 "rate — it will not idle")
         imgui.dummy(ImVec2(0, 6))
 
     def _panel_preview(self, avail_w):
@@ -2158,15 +2195,13 @@ class App:
             bar(x0 + S(44), yy, inner_w * widths[i], S(6), mute, 0.45)
 
         imgui.dummy(ImVec2(w, h))
-        imgui.text_colored(t.text_mute,
-                           "your window, to scale — card style, which "
-                           "sections are on, and the three sliders below")
+        note("your window, to scale — card style, which sections are on, "
+             "and the three sliders below")
         imgui.dummy(ImVec2(0, 6))
 
     def _sec_panel(self):
         if not self._group("PANEL & LAYOUT"):
             return
-        t = theme_mod.current()
         self._panel_preview(imgui.get_content_region_avail().x)
         names = list(CARD_STYLES)
         cur = self._pref("card_style", "raised")
@@ -2183,9 +2218,8 @@ class App:
             self.st.extras["card_shadow"] = nsh
             set_card_style(self.st.extras.get("card_style", "raised"), nsh)
             self._dirty = True
-        imgui.text_colored(t.text_mute,
-                           "outlined drops the fill, so the background "
-                           "effect shows through the panel")
+        note("outlined drops the fill, so the background effect shows "
+             "through the panel")
 
         imgui.dummy(ImVec2(0, 8))
         widgets.label_underlined("show")
@@ -2217,16 +2251,10 @@ class App:
         t = theme_mod.current()
         self._check_pref("movement controls", "jog_enabled", False,
                          apply=lambda x: setattr(self, "jog_enabled", x))
-        # Two short lines, not one long one: `text_colored` does not wrap,
-        # and the single-line version ran off the right edge of the panel.
-        imgui.text_colored(
-            t.text_mute,
-            "a jog pad in the side panel, shown only while the printer is "
-            "idle — never during a print or a pause")
-        imgui.text_colored(
-            t.text_mute,
-            "hold it to unlock, and it re-locks itself 20 seconds after the "
-            "last move")
+        note("a jog pad in the side panel, shown only while the printer "
+             "is idle — never during a print or a pause. Hold it to "
+             "unlock, and it re-locks itself 20 seconds after the last "
+             "move.")
         imgui.dummy(ImVec2(0, 6))
         imgui.text_colored(t.text_dim, self.client.host or "—")
         imgui.same_line()
@@ -2244,11 +2272,8 @@ class App:
     def _sec_presets(self):
         if not self._group("PRESETS"):
             return
-        t = theme_mod.current()
-        imgui.text_colored(t.text_mute,
-                           "saves the current colours to "
-                           "%APPDATA%/bedside/themes, and they appear as a "
-                           "card above")
+        note("saves the current colours to %APPDATA%/bedside/themes, "
+             "and they appear as a card above")
         imgui.set_next_item_width(240)
         _, self.preset_name = imgui.input_text_with_hint(
             "##presetname", "preset name", self.preset_name)
@@ -2293,9 +2318,8 @@ class App:
             self.log.add("diagnostics copied to the clipboard", "ok", "ui")
             sound.play("ok")
         imgui.same_line(0, 10)
-        imgui.text_colored(t.text_mute,
-                           "everything a bug report needs, and no host or "
-                           "API key in it")
+        note("everything a bug report needs, and no host or API key "
+             "in it")
         imgui.dummy(ImVec2(0, 6))
 
     def _diag_report(self) -> str:
@@ -2338,12 +2362,10 @@ class App:
 
     def _sec_alerts(self):
         self._group("notifications")
-        t = theme_mod.current()
         self._check_pref("desktop toasts", "toasts", True,
                          apply=self._set_toasts)
-        imgui.text_colored(t.text_mute,
-                           "click-through, drawn over other windows — you "
-                           "get one when a print finishes or stops")
+        note("click-through, drawn over other windows — you get one "
+             "when a print finishes or stops")
         imgui.dummy(ImVec2(0, 6))
 
     def _sec_about(self):
@@ -2353,9 +2375,8 @@ class App:
         with fonts.use("semi"):
             imgui.text_colored(t.text, f"Bedside {__version__}")
         imgui.same_line(0, 10)
-        imgui.text_colored(t.text_mute,
-                           "Esc back · Ctrl+, settings · F5 reconnect · "
-                           "F1 about")
+        note("Esc back · Ctrl+O files · Ctrl+, settings · "
+             "F5 reconnect · F1 about")
         imgui.dummy(ImVec2(0, 4))
         base = os.path.join(os.environ.get("APPDATA", ""), "bedside")
         for label, path in (("settings", os.path.join(base, "settings.json")),
@@ -2670,7 +2691,10 @@ class App:
         rightpad = imgui.get_content_region_avail().x
         imgui.same_line(0, max(4.0, rightpad - 96))
         with fonts.use("big"):
-            imgui.text_colored(t.accent, f"{pct:.1f}%")
+            # accent_bright, not accent: this is the number you read from
+            # across the room, and a theme is free to pick an accent that
+            # is 1.45:1 on this ground.
+            imgui.text_colored(t.accent_bright, f"{pct:.1f}%")
 
         p = imgui.get_cursor_screen_pos()
         w = imgui.get_content_region_avail().x

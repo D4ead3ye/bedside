@@ -155,6 +155,26 @@ noticeably larger, so it is scaled to 0.88 to keep card layouts intact.
 ImGui has no letter-spacing. They are three to seven characters each, and the
 tracking is most of what separates a laid-out panel from a stack of default text.
 
+### Help text has a container
+
+Explanatory copy under a control used to sit loose on the ground: same
+indent as the label, a colour not far off a value, and nothing saying
+which control it explained — so the eye had to read the paragraph to find
+out what it was attached to. `note()` gives it a recessed ground, a hairline
+border and an accent rule down the left edge, which binds it to what
+precedes it.
+
+Recessed rather than raised on purpose. It is subordinate to the control
+above it, and a ground *darker* than the panel also keeps the contrast
+guarantee below intact — a lighter one would quietly invalidate the
+reference it measures against. The rule uses `accent_bright`, not `accent`,
+because a theme is free to pick an accent that is 1.16:1 on that ground and
+a rule nobody can see is not a rule.
+
+It wraps, too. The bare calls it replaced did not, so long copy had to be
+hand-split into string literals sized by eye against one window width and
+overran the panel at every other. 17 blurbs now go through it.
+
 ### Contrast is guaranteed, not configured
 
 Every text role is checked against the lightest ground the theme defines and
@@ -308,7 +328,7 @@ something open beside you for nine hours.
 
 | group | controls |
 | --- | --- |
-| Theme | presets, accent colour + custom, text size, density, corner radius, panel radius, border width |
+| Theme | four presets (noir-red, noir-blue, slate-lime, noir-iris), accent colour + custom, text size, density, corner radius, panel radius, border width |
 | Type | interface face, readouts face, terminal face |
 | Backdrop | scene, brightness, speed, readability |
 | Contrast | none — the text ramp is guaranteed against the theme automatically, not dialled |

@@ -23,10 +23,10 @@ not a mock-up. [Still screenshot](docs/screenshot.png).</sub>
 - **Safe by construction.** Movement controls are off by default, absent
   unless the printer is idle, and have to be held to unlock; motion G-code
   is refused on the send path, not just hidden in the UI.
-- **Themed throughout.** Six shader backdrops, ten particle effects,
-  four card styles, your own fonts and cue sounds, and every panel section
-  switchable — with text contrast guaranteed against whatever theme you
-  land on, rather than left to a slider.
+- **Themed throughout.** Four themes, six shader backdrops, ten particle
+  effects, four card styles, your own fonts and cue sounds, and every panel
+  section switchable — with text contrast guaranteed against whatever theme
+  you land on, rather than left to a slider.
 - Click-through toasts that report a finished print *over* a fullscreen
   game.
 
