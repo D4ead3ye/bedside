@@ -1,0 +1,27 @@
+# --- build output -----------------------------------------------------
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.py[cod]
+
+# --- environments -----------------------------------------------------
+.venv/
+venv/
+env/
+
+# --- hello_imgui window state -----------------------------------------
+# One per window title, written next to the exe on exit. Machine-local.
+*.ini
+
+# --- local test models ------------------------------------------------
+# G-code and screen recordings are big and are not part of the app.
+model/
+*.gcode
+*.mp4
+
+# --- editor / OS ------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,13 @@
+# Bedside runtime dependencies.
+#
+# VertexUI is the toolkit this is built on and is not on PyPI, so it comes
+# straight from its repository. Pinned to the tag rather than the branch
+# tip: Bedside needs the Toasts `on_event` hook, which landed in 1.2.0, and
+# a moving target is not a dependency.
+vertexui @ git+https://github.com/D4ead3ye/vertexui.git@v1.2.0
+
+imgui-bundle==1.92.900
+numpy>=2.0
+PyOpenGL>=3.1.7
+requests>=2.31
+websocket-client>=1.7
