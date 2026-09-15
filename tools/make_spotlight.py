@@ -100,6 +100,7 @@ def record(gcode_path):
     app.st.theme_name = "noir-iris"
     app.st.accent = ""
     app.st.extras["bg_scrim"] = 0.62
+    app.st.extras["panel_alpha"] = 0.55
 
     app.bg.set("grid")
     app.bg.intensity = 1.25

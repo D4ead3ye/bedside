@@ -257,6 +257,15 @@ movement pad, which appears only when it is both enabled and safe.
 - **Splitter** — a hairline that fades out at both ends with a grip at the
   middle, draggable to resize the panel. Ten pixels of gap was a gap, not a
   division.
+- **Panel translucency is damped behind cards.** `panel_alpha` exists so the
+  particle effects show through a panel; left alone it also lets the shader
+  backdrop composite into the surface text is read on, which at 0.48 put the
+  grid visibly through the JOB and MODEL cards. A dark underlay removes 85%
+  of that leak — measured, the brightest backdrop pixel inside a card drops
+  from 4.80x the card's own surface to 1.51x, against 1.25x for a fully
+  opaque card. The backdrop still moves between and around the cards, which
+  is where it costs nothing. `outlined` cards are exempt, since showing the
+  background through is the point of that style.
 
 ---
 

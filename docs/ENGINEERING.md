@@ -1127,6 +1127,48 @@ Worth recording, because both flattered and then damned the result:
    their brightest pixels returned `#ABABB4` and `#87878F`, the correctly
    lifted colours.
 
+### Panel translucency was compositing the shader into the type
+
+`panel_alpha` was written so the *particle* effects could show through a
+card — sparse dots, harmless behind text. It also lets the *shader
+backdrop* through, which is dense and structured, and that composites
+straight into the surface text is read on. At the author's setting of 0.48
+the grid ran visibly through the JOB and MODEL cards.
+
+The first attempt to measure it reported almost nothing, because it asked
+for the card's "ground" as the darker 60% of its pixels — precisely the
+set that excludes the grid lines doing the damage. Rendering the card at
+the chosen alpha and again opaque, then subtracting, is unambiguous:
+whatever differs inside the card *is* the backdrop coming through it.
+
+The metric that matches the complaint turned out to be the brightest
+non-text pixel inside the card, against the card's own surface — how much
+the backdrop stands out from the thing it is behind:
+
+| panel_alpha | damp | peak / surface |
+| --- | --- | --- |
+| 0.48 | none | 4.80x |
+| 0.48 | 0.50 | 2.53x |
+| 0.48 | 0.85 | **1.51x** |
+| 1.00 (opaque) | — | 1.25x ← the target |
+
+The fix is a dark underlay beneath the card. Compositing
+backdrop → underlay(alpha *d*) → card(alpha *a*) leaves the backdrop
+contributing (1−*a*)(1−*d*) where it contributed (1−*a*), so *d* is simply
+the fraction of the leak removed, and an opaque card pays nothing because
+an opaque fill covers the underlay.
+
+The first version scaled *d* by (1−*a*) as well, reasoning that a barely
+transparent card should barely be damped. That factor is already in the
+compositing, and applying it twice caps the underlay at (1−*a*) — which is
+why it could not clear the grid even at *d*=1, topping out at 2.48x. With
+the double-count removed, *d*=0.85 lands 0.48 at 1.51x against an opaque
+baseline of 1.25x.
+
+`outlined` cards are excluded: showing the background straight through is
+the entire point of that style, and picking it is an unambiguous request
+for exactly the thing being damped everywhere else.
+
 ### A disabled icon button, where there isn't one
 
 `widgets.icon_button` has no disabled state, and the first version simply

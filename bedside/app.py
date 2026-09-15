@@ -189,6 +189,18 @@ def grad_fill(dl, x, y, w, h, t, top, bottom, rounding=None):
             imgui.get_color_u32(top), imgui.get_color_u32(bottom))
 
 
+# How much of the backdrop a translucent panel is allowed to let through.
+# 0 keeps the old behaviour (all of it); 1 removes it entirely.
+#
+# `panel_alpha` was written so the *particle* effects could show through a
+# card — sparse dots, harmless behind text. It also lets the *shader
+# backdrop* through, which is dense and structured, and that composites
+# straight into the surface text has to be read on. Measured on the
+# CONTROLS card at panel_alpha 0.48, the card's own luminance spread came
+# out 2.25x the opaque card's: not dimmer text, a busier ground under it.
+PANEL_DAMP = 0.85
+
+
 def plate(dl, x, y, w, h, t, edge=None):
     """Card background, in whichever style is selected.
 
@@ -200,6 +212,23 @@ def plate(dl, x, y, w, h, t, edge=None):
     """
     r = t.rounding
     p0, p1 = ImVec2(x, y), ImVec2(x + w, y + h)
+
+    # A dark underlay. Compositing backdrop -> underlay(alpha d) ->
+    # card(alpha a) leaves the backdrop contributing (1-a)(1-d) where it
+    # contributed (1-a), so d is simply how much of the leak is removed.
+    #
+    # d is NOT scaled by (1-a): that factor is already in the compositing,
+    # and applying it twice caps the underlay at (1-a), which is why the
+    # first version could not clear the grid even at d=1. An opaque card
+    # still pays nothing, because an opaque fill covers the underlay.
+    #
+    # `outlined` is excluded on purpose — showing the background straight
+    # through is the whole point of that style.
+    a_ = float(getattr(t.surface, "w", 1.0))
+    if a_ < 0.999 and PANEL_DAMP > 0.0 and CARD_STYLE != "outlined":
+        dl.add_rect_filled(
+            p0, p1,
+            imgui.get_color_u32(theme_mod.with_alpha(t.bg, PANEL_DAMP)), r)
 
     if CARD_SHADOW and CARD_STYLE in ("raised", "plated"):
         # Three stacked rounded rects, each fainter and larger. Cheaper
