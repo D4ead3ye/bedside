@@ -17,8 +17,12 @@ not a mock-up. [Still screenshot](docs/screenshot.png).</sub>
 - **A real renderer.** Every extrusion is a box with a depth buffer behind
   it — 1.4M vertices of the reference model at ~5ms a frame, with a
   cutaway for looking inside.
-- **Safe by construction.** No jog controls at all, and motion G-code is
-  refused on the send path, not just hidden in the UI.
+- **Send work to it.** Upload sliced `.gcode`, look at it in the 3D view
+  before committing to it, and start the print — each behind a dialog
+  that names the file.
+- **Safe by construction.** Movement controls are off by default, absent
+  unless the printer is idle, and have to be held to unlock; motion G-code
+  is refused on the send path, not just hidden in the UI.
 - **Themed throughout.** Six shader backdrops, ten particle effects,
   four card styles, your own fonts and cue sounds, and every panel section
   switchable.
@@ -76,32 +80,73 @@ The result is `dist/Bedside/Bedside.exe`. Run **that** one — the
 
 | | |
 | --- | --- |
-| `Esc` | back out of settings |
+| `Esc` | back out of settings or files |
+| `Ctrl` `O` | the printer's files |
 | `Ctrl` `,` | toggle settings |
 | `F5` | reconnect |
 | `F1` | about |
 
-Nothing destructive is bound. Pause and cancel are deliberately not on a
-key — one you can hit by accident must not be able to ruin a nine-hour
-print.
+Nothing destructive is bound. Pause, cancel, start and every jog are
+deliberately not on a key — one you can hit by accident must not be able
+to ruin a nine-hour print. `Ctrl+O` only opens a list.
 
-## No jog controls
+## Files
 
-There are deliberately no jog or home buttons. Moving the head or the bed
-during a print ruins it, and "disabled behind an unlock checkbox" is still
-one mis-click away from doing exactly that — a dashboard you leave open for
-nine hours is the wrong place for a control whose worst case is scrapping
-the job. The printer's own LCD and the OctoPrint web UI both still have
-them for when the machine is idle.
+`Ctrl+O`, or the folder in the title bar, opens the printer's own storage:
+everything on the card with its size, estimated time and age, newest first,
+with a filter box for when there are a lot of them.
 
-The manual G-code box is closed off the same way, in two layers:
+- **Upload** picks one or more sliced `.gcode` files through the ordinary
+  Windows dialog and streams them up with a progress bar. The request body
+  is a generator, so a 120 MB file does not also become 120 MB of request
+  sitting in memory.
+- **Preview** downloads a file and draws it in the 3D view *without*
+  sending it anywhere. The view wears a `PREVIEW` badge for as long as it
+  is showing something other than the running job, and stands down on its
+  own the moment the printer starts one — a monitor that shows the wrong
+  model with a straight face is worse than one that shows nothing.
+- **Print** asks first, naming the file, its size and its estimated time,
+  and re-checks that the printer is still idle when you confirm: the
+  dialog can sit open while something else starts.
+- **Delete** asks too, and is simply not offered on the file being
+  printed.
+
+The dialog is the only way to start a print from here, and nothing on the
+screen is bound to a key beyond `Ctrl+O` to open it.
+
+## Movement
+
+There are jog and home buttons. They are not on by default, and they are
+not always there.
+
+1. **Off until you turn them on**, in Settings → Printer.
+2. **Absent unless the printer is idle** — absent, not greyed out. A
+   control that exists while a job runs is one bad frame, one stale flag
+   or one mis-click away from ruining nine hours of work, and there is no
+   arrangement of confirmations that makes it worth having there.
+3. **Hold to unlock**, 0.7s on a bar that fills as you hold. A click is
+   exactly the thing being guarded against, so the gesture has to be one
+   you cannot make by accident with a stray cursor.
+4. **Re-locks itself** 20 seconds after the last move, counting down in
+   the card header.
+5. **The middle of the pad is not a button.** That square is where a
+   slipped cursor lands, so it holds the step size instead of an action.
+6. **Z down is refused** unless the height is known *and* the move keeps
+   the nozzle at or above the bed. With no reported Z there is no way to
+   tell a safe move from a crash, so it does not guess.
+7. **Re-checked at send time**, not only where the button was drawn —
+   the `printing` flag comes from the last socket push and can lag the
+   printer by a frame.
+
+The printer's own LCD and the OctoPrint web UI still have their own
+controls for everything this does not cover.
+
+The manual G-code box is closed off separately, in two layers:
 
 1. It is **hidden entirely** while a job runs. A text box that accepts
    `G1 X0 Y0` is a jog control with extra steps.
 2. `client.is_motion_command` refuses motion on the **send path** as well,
-   so the guard does not depend on the box being invisible. The `printing`
-   flag comes from the last socket push and can lag the printer by a frame;
-   a check that lives only in the draw code can be raced by one.
+   so the guard does not depend on the box being invisible.
 
 Refused: `G0`-`G3`, `G10`/`G11`, `G28`, `G29`, `G92`, `M18`, `M84`. The last
 three are not moves but belong on the list anyway — `G92` redefines the

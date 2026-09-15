@@ -141,10 +141,48 @@ def printer(dl, cx, cy, r, col):
                        _p(cx, cy, r * 0.55, r * 0.56), col, r * 0.05)
 
 
+def upload(dl, cx, cy, r, col):
+    """An arrow rising out of a tray."""
+    w = r * 0.72
+    # tray
+    dl.add_line(_p(cx, cy, -w, r * 0.62), _p(cx, cy, -w, r * 0.95), col, 1.6)
+    dl.add_line(_p(cx, cy, -w, r * 0.95), _p(cx, cy, w, r * 0.95), col, 1.6)
+    dl.add_line(_p(cx, cy, w, r * 0.62), _p(cx, cy, w, r * 0.95), col, 1.6)
+    # shaft and head
+    dl.add_line(_p(cx, cy, 0, r * 0.55), _p(cx, cy, 0, -r * 0.9), col, 1.7)
+    dl.add_triangle_filled(_p(cx, cy, 0, -r * 1.02),
+                           _p(cx, cy, -r * 0.46, -r * 0.42),
+                           _p(cx, cy, r * 0.46, -r * 0.42), col)
+
+
+def trash(dl, cx, cy, r, col):
+    """Lid, can and two staves."""
+    w = r * 0.62
+    dl.add_line(_p(cx, cy, -r * 0.88, -r * 0.55),
+                _p(cx, cy, r * 0.88, -r * 0.55), col, 1.7)
+    # the handle on the lid
+    dl.add_line(_p(cx, cy, -r * 0.3, -r * 0.55),
+                _p(cx, cy, -r * 0.24, -r * 0.88), col, 1.5)
+    dl.add_line(_p(cx, cy, -r * 0.24, -r * 0.88),
+                _p(cx, cy, r * 0.24, -r * 0.88), col, 1.5)
+    dl.add_line(_p(cx, cy, r * 0.24, -r * 0.88),
+                _p(cx, cy, r * 0.3, -r * 0.55), col, 1.5)
+    # the can, tapering
+    dl.add_line(_p(cx, cy, -w, -r * 0.4), _p(cx, cy, -w * 0.76, r * 0.95),
+                col, 1.6)
+    dl.add_line(_p(cx, cy, w, -r * 0.4), _p(cx, cy, w * 0.76, r * 0.95),
+                col, 1.6)
+    dl.add_line(_p(cx, cy, -w * 0.76, r * 0.95),
+                _p(cx, cy, w * 0.76, r * 0.95), col, 1.6)
+    for dx in (-r * 0.2, r * 0.2):
+        dl.add_line(_p(cx, cy, dx, -r * 0.18), _p(cx, cy, dx, r * 0.66),
+                    col, 1.2)
+
+
 # Registered so icons.draw() and widgets.button(icon=...) can find them.
 EXTRA = {
     "hotend": hotend, "bed": bed, "fan": fan, "cube": cube,
     "terminal": terminal, "palette": palette, "sliders": sliders,
-    "printer": printer,
+    "printer": printer, "upload": upload, "trash": trash,
 }
 vicons.ICONS.update(EXTRA)

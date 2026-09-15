@@ -8,10 +8,12 @@ loop reads once per draw.
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
-import time
+import uuid
 from collections import deque
+from urllib.parse import quote
 
 import requests
 import websocket
@@ -48,6 +50,30 @@ class Snapshot:
     @property
     def paused(self) -> bool:
         return bool((self.flags or {}).get("paused"))
+
+
+class _SizedBody:
+    """An iterable that knows its own length.
+
+    `requests` decides between Content-Length and chunked encoding by
+    calling `super_len()` on the body. A bare generator has no length, so
+    it sets `Transfer-Encoding: chunked` — and it sets it *in addition* to
+    any Content-Length already in the headers, which is a combination
+    proxies are entitled to reject and which RFC 9112 resolves in favour of
+    the chunked framing. Giving the body a `__len__` makes requests reach
+    the other branch on its own, and only one framing header is sent.
+    """
+
+    __slots__ = ("_make", "_len")
+
+    def __init__(self, make, length):
+        self._make, self._len = make, length
+
+    def __len__(self):
+        return self._len
+
+    def __iter__(self):
+        return self._make()
 
 
 class OctoClient:
@@ -115,6 +141,84 @@ class OctoClient:
     def download_gcode(self, path: str, origin: str = "local") -> bytes:
         r = self.get(f"/downloads/files/{origin}/{path}", timeout=120)
         return r.content
+
+    def delete(self, path):
+        r = requests.delete(self.host + path, headers=self._headers(),
+                            timeout=30)
+        r.raise_for_status()
+        return r
+
+    # ------------------------------------------------------- file storage
+
+    def list_files(self, origin: str = "local"):
+        """Everything on the printer, plus how much room is left."""
+        r = self.get(f"/api/files/{origin}?recursive=true", timeout=30)
+        return r.json()
+
+    def delete_file(self, path: str, origin: str = "local"):
+        self.delete(f"/api/files/{origin}/{quote(path)}")
+
+    def select_file(self, path: str, origin: str = "local",
+                    start: bool = False):
+        """Load a file into the printer, and optionally begin printing it."""
+        self.post(f"/api/files/{origin}/{quote(path)}",
+                  {"command": "select", "print": bool(start)})
+
+    def upload_file(self, local_path: str, origin: str = "local",
+                    folder: str = "", progress=None) -> str:
+        """Streamed multipart upload. Returns the printer-side path.
+
+        `requests` builds the whole multipart body in memory when handed
+        `files=`, so a 120 MB sliced file costs 120 MB of body on top of
+        the 120 MB already read, and reports no progress at all because the
+        body is finished before the first byte leaves. Writing the envelope
+        by hand costs about twenty lines and turns the upload into a
+        generator: constant memory, and a fraction the UI can draw.
+        """
+        name = os.path.basename(local_path)
+        size = os.path.getsize(local_path)
+        boundary = "----bedside" + uuid.uuid4().hex
+
+        def field(key, value):
+            return (f"--{boundary}\r\n"
+                    f'Content-Disposition: form-data; name="{key}"\r\n\r\n'
+                    f"{value}\r\n").encode()
+
+        head = b""
+        if folder:
+            head += field("path", folder)
+        head += (f"--{boundary}\r\n"
+                 f'Content-Disposition: form-data; name="file"; '
+                 f'filename="{name}"\r\n'
+                 f"Content-Type: application/octet-stream\r\n\r\n").encode()
+        tail = f"\r\n--{boundary}--\r\n".encode()
+
+        def body():
+            yield head
+            sent = 0
+            with open(local_path, "rb") as fh:
+                while True:
+                    chunk = fh.read(256 * 1024)
+                    if not chunk:
+                        break
+                    sent += len(chunk)
+                    if progress:
+                        progress(sent / size if size else 1.0)
+                    yield chunk
+            yield tail
+
+        headers = dict(self._headers())
+        headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
+        total = len(head) + size + len(tail)
+        r = requests.post(self.host + f"/api/files/{origin}",
+                          data=_SizedBody(body, total),
+                          headers=headers, timeout=(15, 600))
+        r.raise_for_status()
+        try:
+            return (r.json().get("files", {}).get(origin, {})
+                    .get("path") or name)
+        except Exception:
+            return name
 
     # --------------------------------------------------- app-key pairing
 

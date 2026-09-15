@@ -19,7 +19,8 @@ import vertexui as vui
 from vertexui import anim, fonts, icons, logview, settings as vsettings
 from vertexui import sound, theme as theme_mod, widgets
 
-from . import __version__, bg as bgmod, effects, gcode, picons, sounds
+from . import (__version__, bg as bgmod, effects, files as filestore,
+               gcode, pick, picons, sounds)
 from .client import (OctoClient, classify_line, is_motion_command,
                      normalise_host)
 from .gcode import Loader
@@ -407,6 +408,16 @@ class App:
         self.fx = effects.Effects()
         self.bg = bgmod.Backdrop()
         self._fade = 0.0            # screen-change wipe, 1 -> 0
+        self._jog_hold = 0.0        # seconds the unlock button has been held
+        self._jog_until = 0.0       # armed until this imgui clock time
+        self._jog_step = 1.0
+        self.store = filestore.FileStore()
+        self.picker = pick.Picker()
+        self._files_filter = ""
+        self._files_seen = False    # has this session listed once
+        self._preview_path = None   # previewing a file that is not the job
+        self._ask_print = None      # Entry awaiting confirmation
+        self._ask_delete = None
         self._screen_was = ""
         self.preset_name = ""
         self._log_hidden = 0
@@ -481,6 +492,7 @@ class App:
         self.bg.intensity = float(ex.get("bg_intensity", 1.0))
         self.bg.speed = float(ex.get("bg_speed", 1.0))
         self.scrim = float(ex.get("bg_scrim", 0.72))
+        self.jog_enabled = bool(ex.get("jog_enabled", False))
         set_card_style(ex.get("card_style", "raised"),
                        ex.get("card_shadow", True))
         self.panel_show = {k: bool(ex.get("panel_" + k, True))
@@ -563,6 +575,10 @@ class App:
         gen = self.client.job_generation
         if gen != self._gen and self.client.job_file:
             self._gen = gen
+            # The printer moving on to a real job outranks whatever was
+            # being looked at, so the preview stands down rather than
+            # sitting there claiming to be the thing on the bed.
+            self._preview_path = None
             self._applied = None
             self.view.set_toolpath(None)
             self.loader.start(self.client, self.client.job_file,
@@ -626,9 +642,17 @@ class App:
         if io.want_capture_keyboard:
             return                      # a text field has the keyboard
         if imgui.is_key_pressed(imgui.Key.escape):
-            if self.screen == "settings":
+            if self.screen in ("settings", "files"):
                 self.screen = "dash"
                 sound.play("click")
+        elif io.key_ctrl and imgui.is_key_pressed(imgui.Key.o):
+            # Open, the way every other desktop app spells it. Nothing
+            # destructive hangs off it — it only shows the list.
+            if self.screen == "files":
+                self.screen = "dash"
+            else:
+                self._open_files()
+            sound.play("click")
         elif io.key_ctrl and imgui.is_key_pressed(imgui.Key.comma):
             self.screen = "dash" if self.screen == "settings" else "settings"
             sound.play("click")
@@ -701,7 +725,7 @@ class App:
 
             # Settings and setup are almost nothing but bare text, so the
             # whole window gets the wash rather than a rect per label.
-            if self.screen in ("settings", "setup"):
+            if self.screen in ("settings", "setup", "files"):
                 scrim(imgui.get_window_draw_list(), 0.0, 0.0, w, h,
                       theme_mod.current(), self.scrim)
 
@@ -710,11 +734,14 @@ class App:
             self.fx.paint(imgui.get_window_draw_list(), 0.0, 0.0, w, h,
                           now, 1.0)
 
+        self._pump_files()
         self._shortcuts()
         if self.screen == "setup":
             self._setup()
         elif self.screen == "settings":
             self._settings()
+        elif self.screen == "files":
+            self._files_screen()
         else:
             self._dash()
 
@@ -808,6 +835,376 @@ class App:
             self.screen = "dash"
             self.client.start()
         imgui.unindent(pad)
+
+    # ---------------------------------------------------------------- files
+
+    def _open_files(self):
+        """Show the browser, and list once on the way in."""
+        self.screen = "files"
+        if not self._files_seen and self.client.host and self.client.api_key:
+            self._files_seen = True
+            self.store.refresh(self.client)
+
+    def _can_start(self, snap):
+        """Whether it is safe to hand the printer a new job right now."""
+        return bool(snap.connected and not snap.printing
+                    and (snap.flags or {}).get("operational"))
+
+    def _pump_files(self):
+        """Background file work into the log, and the picker's result in."""
+        for text, kind in self.store.drain_events():
+            self.log.add(text, kind, "ui")
+            if self.toasts and kind in ("ok", "error"):
+                try:
+                    self.toasts.notify(kind, text)
+                except Exception:
+                    pass
+        busy, paths, err = self.picker.take()
+        if err:
+            self.log.add("file dialog: " + err, "error", "ui")
+        if paths:
+            self.log.add(f"uploading {len(paths)} file(s)", "info", "ui")
+            self.store.upload(self.client, paths)
+        if busy:
+            anim.mark_busy()
+
+    def _preview(self, entry):
+        """Draw a file that is not the running job, without printing it."""
+        self._preview_path = entry.path
+        self._applied = None
+        self.view.set_toolpath(None)
+        self.loader.start(self.client, entry.path, entry.origin)
+        self.log.add(f"previewing {entry.display}", "info", "gcode")
+        self.screen = "dash"
+        sound.play("click")
+
+    def _preview_banner(self, vp, size):
+        """Say, on the view itself, that this is not what is being printed.
+
+        Without it the 3D panel is indistinguishable from the live job, and
+        a monitor that shows the wrong model with a straight face is worse
+        than one that shows nothing.
+        """
+        if not self._preview_path:
+            return
+        t = theme_mod.current()
+        dl = imgui.get_window_draw_list()
+        name = self._preview_path.rpartition("/")[2]
+        with fonts.use("semi"):
+            tw = imgui.calc_text_size(name).x
+        w = 96.0 + tw + 34.0
+        x, y = vp.x + 10.0, vp.y + 10.0
+        h = 30.0
+        dl.add_rect_filled(ImVec2(x, y), ImVec2(x + w, y + h),
+                           imgui.get_color_u32(
+                               theme_mod.with_alpha(t.surface, 0.92)),
+                           t.rounding)
+        dl.add_rect(ImVec2(x, y), ImVec2(x + w, y + h),
+                    imgui.get_color_u32(theme_mod.with_alpha(t.accent, 0.9)),
+                    t.rounding, 1.0)
+        with fonts.use("label"):
+            caps(dl, x + 12, y + 11, "PREVIEW",
+                 imgui.get_color_u32(t.accent), 1.4)
+        with fonts.use("semi"):
+            dl.add_text(ImVec2(x + 84, y + 7),
+                        imgui.get_color_u32(t.text), name)
+        # A close box, so getting back to the job does not need the browser.
+        bx = x + w - 26.0
+        keep = imgui.get_cursor_screen_pos()
+        imgui.set_cursor_screen_pos(ImVec2(bx, y + 5))
+        imgui.invisible_button("##unpreview", ImVec2(20.0, 20.0))
+        hot = imgui.is_item_hovered()
+        if imgui.is_item_clicked():
+            self._preview_path = None
+            self._applied = None
+            self.view.set_toolpath(None)
+            self._gen = -1          # make _pump reload the real job
+            sound.play("click")
+        if hot:
+            imgui.set_tooltip("back to the running job")
+        icons.draw("cross", dl, bx + 10, y + 15, 6.0,
+                   imgui.get_color_u32(t.text if hot else t.text_mute))
+        imgui.set_cursor_screen_pos(keep)
+
+    def _row_action(self, key, icon, x, y, tip, enabled):
+        """An icon button, or an inert glyph where it would refuse.
+
+        `widgets.icon_button` has no disabled state, and a button that
+        looks live and then declines is at its worst on exactly the row
+        this matters for — the one being printed. So when the action is
+        unavailable the button is not submitted at all: the glyph is
+        painted dim, it takes no id, and it still explains itself on
+        hover.
+        """
+        t = theme_mod.current()
+        if enabled:
+            imgui.set_cursor_screen_pos(ImVec2(x, y))
+            return widgets.icon_button(icon, tooltip=tip, key=key)
+        icons.draw(icon, imgui.get_window_draw_list(), x + 15.0, y + 15.0,
+                   7.0, imgui.get_color_u32(
+                       theme_mod.with_alpha(t.text_mute, 0.3)))
+        if tip and imgui.is_mouse_hovering_rect(ImVec2(x, y),
+                                                ImVec2(x + 30.0, y + 30.0)):
+            imgui.set_tooltip(tip)
+        return False
+
+    def _files_screen(self):
+        t = theme_mod.current()
+        snap = self.client.snapshot()
+        st = self.store.snapshot()
+
+        if widgets.icon_button("chevron", tooltip="back to the printer"):
+            self.screen = "dash"
+        imgui.same_line()
+        with fonts.use("title"):
+            imgui.text_colored(t.text, "Files")
+        imgui.same_line()
+        imgui.text_colored(t.text_mute, "  on the printer")
+
+        # Storage, right-aligned on the title row.
+        if st["total"]:
+            free, total = st["free"], st["total"]
+            txt = f"{free / 1e9:.1f} GB free of {total / 1e9:.0f} GB"
+            imgui.same_line()
+            avail = imgui.get_content_region_avail().x
+            imgui.same_line(0, max(8.0, avail - imgui.calc_text_size(txt).x
+                                   - 8.0))
+            used = 1.0 - (free / total if total else 0.0)
+            imgui.text_colored(t.warn if used > 0.92 else t.text_mute, txt)
+
+        imgui.dummy(ImVec2(0, 10))
+
+        # ---- toolbar
+        paired = bool(self.client.host and self.client.api_key)
+        picking = self.picker.busy
+        if widgets.button("Upload…", 130, primary=True, icon="upload",
+                          enabled=paired and not picking,
+                          tooltip="pick one or more .gcode files"):
+            self.picker.start(pick.active_window(), multi=True)
+        imgui.same_line(0, 8)
+        if widgets.button("Refresh", 110, icon="refresh", enabled=paired,
+                          key="frefresh"):
+            self.store.refresh(self.client)
+        imgui.same_line(0, 8)
+        imgui.set_next_item_width(240)
+        _, self._files_filter = imgui.input_text_with_hint(
+            "##ffilter", "filter…", self._files_filter)
+        if self._files_filter:
+            imgui.same_line(0, 6)
+            if widgets.icon_button("cross", tooltip="clear", key="fclear"):
+                self._files_filter = ""
+
+        imgui.dummy(ImVec2(0, 8))
+
+        # ---- what the worker is doing
+        if st["busy"] or st["error"]:
+            w = imgui.get_content_region_avail().x
+            p = imgui.get_cursor_screen_pos()
+            dl = imgui.get_window_draw_list()
+            bad = bool(st["error"])
+            col = t.danger if bad else t.accent
+            grad_fill(dl, p.x, p.y, w, 34.0, t,
+                      theme_mod.with_alpha(col, 0.16),
+                      theme_mod.with_alpha(col, 0.06))
+            msg = (st["error"] if bad
+                   else f"{st['op']} — {st['message']}")
+            with fonts.use("semi"):
+                dl.add_text(ImVec2(p.x + 12, p.y + 8),
+                            imgui.get_color_u32(t.text), msg[:90])
+            frac = st["fraction"] or 0.0
+            if not bad and frac > 0.001:
+                pct = f"{frac * 100:.0f}%"
+                dl.add_text(ImVec2(p.x + w - 12 - imgui.calc_text_size(pct).x,
+                                   p.y + 8), imgui.get_color_u32(t.accent),
+                            pct)
+                dl.add_rect_filled(
+                    ImVec2(p.x, p.y + 31), ImVec2(p.x + w * frac, p.y + 34),
+                    imgui.get_color_u32(col), 1.5)
+            imgui.dummy(ImVec2(w, 42))
+            anim.mark_busy()
+
+        if not paired:
+            imgui.text_colored(t.text_mute,
+                               "Not paired with a printer yet.")
+            return
+
+        # ---- the list
+        entries = st["entries"]
+        needle = self._files_filter.strip().lower()
+        if needle:
+            entries = [e for e in entries if needle in e.display.lower()]
+
+        can_start = self._can_start(snap)
+        imgui.begin_child("##filelist",
+                          imgui.get_content_region_avail(), False)
+        dl = imgui.get_window_draw_list()
+        w = imgui.get_content_region_avail().x
+        ROW = 52.0
+
+        if not entries:
+            imgui.dummy(ImVec2(0, 24))
+            imgui.indent(16)
+            with fonts.use("semi"):
+                imgui.text_colored(
+                    t.text_dim,
+                    "Nothing here yet." if not needle
+                    else f"No file matches \u201c{self._files_filter}\u201d.")
+            imgui.dummy(ImVec2(0, 2))
+            imgui.text_colored(
+                t.text_mute,
+                "Upload a sliced .gcode to get started."
+                if not needle else "Clear the filter to see the rest.")
+            imgui.unindent(16)
+
+        for i, e in enumerate(entries):
+            p = imgui.get_cursor_screen_pos()
+            live = (snap.job_file == e.path and snap.printing)
+            hot = imgui.is_mouse_hovering_rect(
+                ImVec2(p.x, p.y), ImVec2(p.x + w, p.y + ROW))
+            edge = t.ok if live else None
+            plate(dl, p.x, p.y, w, ROW, t, edge=edge)
+            if hot:
+                dl.add_rect_filled(
+                    ImVec2(p.x, p.y), ImVec2(p.x + w, p.y + ROW),
+                    imgui.get_color_u32(
+                        theme_mod.with_alpha(t.surface_hover, 0.5)),
+                    t.rounding)
+
+            icons.draw("printer" if live else "cube", dl,
+                       p.x + 24, p.y + ROW * 0.5, 8.0,
+                       imgui.get_color_u32(t.ok if live else t.text_mute))
+            shown = (e.display if len(e.display) <= 58
+                     else e.display[:57] + "\u2026")
+            with fonts.use("semi"):
+                dl.add_text(ImVec2(p.x + 44, p.y + 9),
+                            imgui.get_color_u32(t.text), shown)
+            sub_ = f"{e.size_text()}   ·   {e.est_text()}   ·   {e.age_text()}"
+            if e.folder:
+                sub_ = e.folder + "/   ·   " + sub_
+            dl.add_text(ImVec2(p.x + 44, p.y + 28),
+                        imgui.get_color_u32(t.text_mute), sub_)
+            if live:
+                with fonts.use("label"):
+                    caps(dl, p.x + w - 210, p.y + 21, "PRINTING",
+                         imgui.get_color_u32(t.ok), 1.4)
+
+            # Actions, right-aligned. Print is the one with consequences,
+            # so it is the only one that is ever disabled and the only one
+            # that asks first.
+            bx = p.x + w - 122.0
+            by = p.y + 11.0
+            if self._row_action(f"fview{i}", "cube", bx, by,
+                                "show it in the 3D view", True):
+                self._preview(e)
+            if self._row_action(
+                    f"fprint{i}", "play", bx + 36.0, by,
+                    ("this is the running job" if live else
+                     "print this file" if can_start else
+                     f"the printer is {(snap.state_text or 'busy').lower()}"),
+                    can_start and not live):
+                self._ask_print = e
+            if self._row_action(
+                    f"fdel{i}", "trash", bx + 72.0, by,
+                    ("cannot delete the file it is printing" if live
+                     else "delete from the printer"),
+                    not live):
+                self._ask_delete = e
+
+            imgui.set_cursor_screen_pos(ImVec2(p.x, p.y + ROW + 6))
+            imgui.dummy(ImVec2(w, 0))
+
+        imgui.end_child()
+        self._confirm_print(snap)
+        self._confirm_delete()
+
+    def _confirm_print(self, snap):
+        """Starting a print is the most expensive click in the app."""
+        t = theme_mod.current()
+        if self._ask_print is not None and not imgui.is_popup_open(
+                "Start print###askprint"):
+            imgui.open_popup("Start print###askprint")
+        vp = imgui.get_main_viewport()
+        imgui.set_next_window_pos(
+            ImVec2(vp.pos.x + vp.size.x * 0.5, vp.pos.y + vp.size.y * 0.5),
+            imgui.Cond_.appearing, ImVec2(0.5, 0.5))
+        if imgui.begin_popup_modal(
+                "Start print###askprint", None,
+                imgui.WindowFlags_.always_auto_resize)[0]:
+            e = self._ask_print
+            if e is None:
+                imgui.close_current_popup()
+                imgui.end_popup()
+                return
+            with fonts.use("semi"):
+                imgui.text_colored(t.text, "Send this to the printer?")
+            imgui.dummy(ImVec2(0, 6))
+            imgui.text_colored(t.accent, e.display[:52])
+            imgui.text_colored(
+                t.text_mute,
+                f"{e.size_text()}   ·   about {e.est_text()}")
+            imgui.dummy(ImVec2(0, 4))
+            # Re-checked here, not just where the button was drawn: the
+            # dialog can sit open while the printer starts something else.
+            ready = self._can_start(snap)
+            if not ready:
+                imgui.text_colored(t.danger,
+                                   "The printer is no longer idle.")
+            else:
+                imgui.text_colored(t.text_mute,
+                                   "Make sure the bed is clear.")
+            imgui.dummy(ImVec2(0, 10))
+            if widgets.button("Start print", 150, height=30.0, primary=True,
+                              enabled=ready, icon="play", key="dostart"):
+                self.store.start_print(self.client, e)
+                self._ask_print = None
+                imgui.close_current_popup()
+            imgui.same_line(0, 8)
+            if widgets.button("Keep it", 110, height=30.0, key="nostart"):
+                self._ask_print = None
+                imgui.close_current_popup()
+            imgui.end_popup()
+        elif self._ask_print is not None and not imgui.is_popup_open(
+                "Start print###askprint"):
+            self._ask_print = None      # dismissed with Escape
+
+    def _confirm_delete(self):
+        t = theme_mod.current()
+        if self._ask_delete is not None and not imgui.is_popup_open(
+                "Delete file###askdelete"):
+            imgui.open_popup("Delete file###askdelete")
+        vp = imgui.get_main_viewport()
+        imgui.set_next_window_pos(
+            ImVec2(vp.pos.x + vp.size.x * 0.5, vp.pos.y + vp.size.y * 0.5),
+            imgui.Cond_.appearing, ImVec2(0.5, 0.5))
+        if imgui.begin_popup_modal(
+                "Delete file###askdelete", None,
+                imgui.WindowFlags_.always_auto_resize)[0]:
+            e = self._ask_delete
+            if e is None:
+                imgui.close_current_popup()
+                imgui.end_popup()
+                return
+            with fonts.use("semi"):
+                imgui.text_colored(t.text, "Delete from the printer?")
+            imgui.dummy(ImVec2(0, 6))
+            imgui.text_colored(t.accent, e.display[:52])
+            imgui.text_colored(t.text_mute,
+                               "This removes it from the printer's storage. "
+                               "The copy on this PC is untouched.")
+            imgui.dummy(ImVec2(0, 10))
+            if widgets.button("Delete", 130, height=30.0, primary=True,
+                              key="dodel"):
+                self.store.remove(self.client, e)
+                self._ask_delete = None
+                imgui.close_current_popup()
+            imgui.same_line(0, 8)
+            if widgets.button("Keep it", 110, height=30.0, key="nodel"):
+                self._ask_delete = None
+                imgui.close_current_popup()
+            imgui.end_popup()
+        elif self._ask_delete is not None and not imgui.is_popup_open(
+                "Delete file###askdelete"):
+            self._ask_delete = None     # dismissed with Escape
 
     # ------------------------------------------------------------- settings
 
@@ -1708,6 +2105,19 @@ class App:
         if not self._group("PRINTER"):
             return
         t = theme_mod.current()
+        self._check_pref("movement controls", "jog_enabled", False,
+                         apply=lambda x: setattr(self, "jog_enabled", x))
+        # Two short lines, not one long one: `text_colored` does not wrap,
+        # and the single-line version ran off the right edge of the panel.
+        imgui.text_colored(
+            t.text_mute,
+            "a jog pad in the side panel, shown only while the printer is "
+            "idle — never during a print or a pause")
+        imgui.text_colored(
+            t.text_mute,
+            "hold it to unlock, and it re-locks itself 20 seconds after the "
+            "last move")
+        imgui.dummy(ImVec2(0, 6))
         imgui.text_colored(t.text_dim, self.client.host or "—")
         imgui.same_line()
         widgets.badge("connected" if self.client.connected else "offline",
@@ -1869,7 +2279,7 @@ class App:
         # ever. Live M106 traffic is the fallback for SD prints, where there
         # is no file to read.
         fan = snap.fan
-        if self._applied is not None:
+        if self._applied is not None and self._preview_path is None:
             cur_seg = self._applied.index_at(snap.filepos)
             fan = self._applied.fan_at(cur_seg)
 
@@ -1901,6 +2311,7 @@ class App:
             imgui.dummy(ImVec2(0, 2))
         if show["controls"]:
             self._controls(snap)
+        self._jog(snap)
         if show["job"]:
             self._job(snap)
         if show["model"]:
@@ -2028,7 +2439,7 @@ class App:
         # the dot, the host and the settings gear were all placed a full
         # window-width off the right edge and were simply never on screen.
         host = (self.client.host or "").replace("http://", "")
-        block = 22 + imgui.calc_text_size(host).x + 8 + 34
+        block = 22 + imgui.calc_text_size(host).x + 8 + 34 + 36
         imgui.same_line(max(240.0, total - block))
         col = t.ok if snap.connected else t.danger
         pp = imgui.get_cursor_screen_pos()
@@ -2046,6 +2457,10 @@ class App:
             if widgets.icon_button("refresh", tooltip="reconnect  (F5)"):
                 self._reconnect()
             imgui.same_line(0, 6)
+        if widgets.icon_button("folder", tooltip="files on the printer"
+                               "  (Ctrl+O)"):
+            self._open_files()
+        imgui.same_line(0, 6)
         if widgets.icon_button("gear", tooltip="settings  (Ctrl+,)"):
             self.screen = "settings"
         widgets.activity_rule(imgui.get_content_region_avail().x,
@@ -2122,8 +2537,10 @@ class App:
         vp = imgui.get_cursor_screen_pos()
         size = ImVec2(avail.x, view_h)
         hits = self._view_overlay_input(vp, size)
-        self.view.draw(size, cur_seg, loading, live=snap.printing)
+        self.view.draw(size, cur_seg, loading,
+                       live=snap.printing and self._preview_path is None)
         self._view_overlay_paint(hits)
+        self._preview_banner(vp, size)
 
         imgui.dummy(ImVec2(0, 8))
         dl = imgui.get_window_draw_list()
@@ -2465,6 +2882,12 @@ class App:
         run = snap.printing and self._unlock
         mute = imgui.get_color_u32(t.text_mute)
 
+        # Declines rather than clipping, the way the model card does. On an
+        # idle machine every button in here is disabled anyway, so it is
+        # the right thing to give up the space to the movement pad.
+        if imgui.get_content_region_avail().y < 96.0:
+            return
+
         p = imgui.get_cursor_screen_pos()
         w = imgui.get_content_region_avail().x
         fh = imgui.get_frame_height()
@@ -2489,7 +2912,7 @@ class App:
         imgui.set_cursor_screen_pos(ImVec2(p.x + 21 + bw, by + 6))
         if widgets.button("Cancel", bw, height=30.0, enabled=run,
                           icon="stop"):
-            imgui.open_popup("cancel?")
+            imgui.open_popup("Cancel print###askcancel")
         self._confirm_cancel()
 
         ry = by + 44.0
@@ -2513,6 +2936,195 @@ class App:
                 ImVec2(p.x + w - 71, ry + (row2 - 28) * 0.5))
             if widgets.button("Send", 58, height=28.0, enabled=en) or entered:
                 self._send_gcode(snap)
+
+        imgui.set_cursor_screen_pos(p)
+        imgui.dummy(ImVec2(w, h))
+
+    # How long the unlock must be held, and how long it stays unlocked with
+    # nothing pressed. Both deliberately awkward.
+    JOG_HOLD = 0.7
+    JOG_ARMED = 20.0
+    JOG_STEPS = (0.1, 1.0, 10.0)
+
+    def _jog_idle(self, snap):
+        """Movement is offered only on a machine that is doing nothing.
+
+        Not "disabled while printing" — *absent*. A control that exists
+        while a job runs is one bad frame, one stale flag or one mis-click
+        away from ruining nine hours of work, and there is no arrangement
+        of confirmations that makes it worth having there. The printer's
+        own LCD is still right next to the printer.
+        """
+        return bool(self.jog_enabled and snap.connected and not snap.printing
+                    and (snap.flags or {}).get("operational"))
+
+    def _jog_send(self, snap, axis=None, delta=0.0, home=False):
+        """Re-checks the state it was drawn under, immediately before send.
+
+        The printing flag comes from the last socket push and can lag the
+        printer by a frame, so a guard that lives only in the draw code can
+        be raced by one. OctoPrint refuses these endpoints while printing
+        too — this is the belt to that braces.
+        """
+        if not self._jog_idle(snap):
+            self.log.add("movement refused: printer is not idle", "warn", "ui")
+            return
+        if home:
+            self.client.command("/api/printer/printhead",
+                                {"command": "home", "axes": ["x", "y", "z"]})
+            self.log.add("homing all axes", "info", "ui")
+        else:
+            self.client.command(
+                "/api/printer/printhead",
+                {"command": "jog", axis: delta, "absolute": False,
+                 "speed": 1500 if axis == "z" else 3000})
+        self._jog_until = imgui.get_time() + self.JOG_ARMED
+        sound.play("click")
+
+    def _jog(self, snap):
+        """Arm-by-hold, auto-disarming movement pad."""
+        if not self._jog_idle(snap):
+            self._jog_until = 0.0
+            self._jog_hold = 0.0
+            return
+        t = theme_mod.current()
+        dl = imgui.get_window_draw_list()
+        mute = imgui.get_color_u32(t.text_mute)
+        now = imgui.get_time()
+        armed = now < self._jog_until
+        avail = imgui.get_content_region_avail()
+        # Two armed layouts. The cross pad is the one you want — the
+        # spatial mapping is what stops a slip landing on the wrong axis —
+        # but it needs height the panel does not always have. Shrinking its
+        # buttons to fit would trade one mis-click risk for a worse one, so
+        # below the threshold it becomes grouped rows at full button size
+        # instead.
+        cross = avail.y >= 176.0
+        h = (170.0 if cross else 118.0) if armed else 74.0
+        if avail.y < h + 4:
+            return                      # no room at all: leave it out
+        w = avail.x
+        p = imgui.get_cursor_screen_pos()
+        edge = t.warn if armed else t.text_mute
+        plate(dl, p.x, p.y, w, h, t, edge=edge)
+        left = max(0.0, self._jog_until - now)
+        by = card_head(dl, p.x, p.y, w, t, "sliders", "MOVE",
+                       right=(f"{left:.0f}S LEFT" if armed else "LOCKED"),
+                       right_col=edge, dot=edge if armed else None)
+
+        if not armed:
+            # Hold, not click. A click is exactly the thing being guarded
+            # against, so the gesture has to be one you cannot make by
+            # accident with a stray cursor.
+            bw = w - 26.0
+            imgui.set_cursor_screen_pos(ImVec2(p.x + 13, by + 8))
+            imgui.invisible_button("##jogarm", ImVec2(bw, 30.0))
+            held = imgui.is_item_active()
+            hot = imgui.is_item_hovered()
+            io = imgui.get_io()
+            if held:
+                self._jog_hold += io.delta_time
+                anim.mark_busy()
+                if self._jog_hold >= self.JOG_HOLD:
+                    self._jog_until = now + self.JOG_ARMED
+                    self._jog_hold = 0.0
+                    sound.play("ok")
+            else:
+                self._jog_hold = max(0.0, self._jog_hold - io.delta_time * 2.0)
+            frac = min(1.0, self._jog_hold / self.JOG_HOLD)
+            dl.add_rect_filled(
+                ImVec2(p.x + 13, by + 8), ImVec2(p.x + 13 + bw, by + 38),
+                imgui.get_color_u32(theme_mod.with_alpha(
+                    t.surface_hover if hot else t.bg, 0.9)), t.rounding)
+            if frac > 0.001:
+                dl.add_rect_filled(
+                    ImVec2(p.x + 13, by + 8),
+                    ImVec2(p.x + 13 + bw * frac, by + 38),
+                    imgui.get_color_u32(theme_mod.with_alpha(t.warn, 0.55)),
+                    t.rounding)
+            label = "hold to unlock movement"
+            with fonts.use("semi"):
+                tw = imgui.calc_text_size(label).x
+                dl.add_text(ImVec2(p.x + 13 + (bw - tw) * 0.5, by + 14),
+                            imgui.get_color_u32(t.text_dim), label)
+            imgui.set_cursor_screen_pos(p)
+            imgui.dummy(ImVec2(w, h))
+            return
+
+        # ---- step size, and home, on one row so the pad keeps its height
+        sx = p.x + 13
+        for st_ in self.JOG_STEPS:
+            on = abs(self._jog_step - st_) < 1e-6
+            imgui.set_cursor_screen_pos(ImVec2(sx, by + 5))
+            if widgets.button(f"{st_:g}", 44, height=26.0, primary=on,
+                              key=f"jogstep{st_:g}"):
+                self._jog_step = st_
+            sx += 48
+        with fonts.use("label"):
+            caps(dl, sx + 2, by + 12, "MM", mute, 1.2)
+        imgui.set_cursor_screen_pos(ImVec2(p.x + w - 99, by + 5))
+        if widgets.button("Home all", 86, height=26.0, key="joghome"):
+            self._jog_send(snap, home=True)
+
+        # ---- the pad. Z sits apart from X/Y on purpose: it is the axis
+        # that can drive the nozzle into the bed, and it has no business
+        # sharing a cluster with the harmless ones.
+        step = self._jog_step
+        bs, gap = 30.0, 4.0
+        span = bs + gap
+        oy = by + 37
+        z = snap.z
+        # Z down needs a known height AND a move that keeps the nozzle at
+        # or above the bed. With no reported Z there is no way to tell a
+        # safe move from a crash, so it does not guess.
+        down_ok = z is not None and (z - step) >= -1e-6
+        down_tip = (None if down_ok else
+                    ("Z is unknown \u2014 home first" if z is None
+                     else f"would go below the bed (Z {z:.2f})"))
+
+        def pad(cx, cy, label, axis, delta, enabled=True, tip=None):
+            imgui.set_cursor_screen_pos(ImVec2(cx, cy))
+            if widgets.button(label, bs, height=bs, enabled=enabled,
+                              key=f"jog{label}{axis}", tooltip=tip):
+                self._jog_send(snap, axis, delta)
+
+        if cross:
+            ox = p.x + 16
+            pad(ox + span, oy, "Y+", "y", step)
+            pad(ox, oy + span, "X-", "x", -step)
+            pad(ox + 2 * span, oy + span, "X+", "x", step)
+            pad(ox + span, oy + 2 * span, "Y-", "y", -step)
+            # The middle of the pad is not a button. It is the square a
+            # slipped cursor lands on, so it holds the step size instead
+            # of an action.
+            cx0, cy0 = ox + span, oy + span
+            dl.add_rect_filled(ImVec2(cx0, cy0), ImVec2(cx0 + bs, cy0 + bs),
+                               imgui.get_color_u32(
+                                   theme_mod.with_alpha(t.bg, 0.55)),
+                               t.rounding)
+            with fonts.use("label"):
+                lab = f"{step:g}"
+                caps(dl, cx0 + (bs - caps_width(lab, 1.2)) * 0.5, cy0 + 10,
+                     lab, mute, 1.2)
+            zx = ox + 3 * span + 16
+            pad(zx, oy, "Z+", "z", step)
+            with fonts.use("label"):
+                caps(dl, zx + 11, oy + span + 10, "Z", mute, 1.2)
+            pad(zx, oy + 2 * span, "Z-", "z", -step, enabled=down_ok,
+                tip=down_tip)
+        else:
+            # Grouped in pairs with a wide gutter between axes, so the
+            # neighbour of a button is always its own opposite — the one
+            # press whose worst case is undoing the last one.
+            ox = p.x + 14
+            group = 2 * span + 18
+            pad(ox, oy, "X-", "x", -step)
+            pad(ox + span, oy, "X+", "x", step)
+            pad(ox + group, oy, "Y-", "y", -step)
+            pad(ox + group + span, oy, "Y+", "y", step)
+            pad(ox + 2 * group, oy, "Z-", "z", -step, enabled=down_ok,
+                tip=down_tip)
+            pad(ox + 2 * group + span, oy, "Z+", "z", step)
 
         imgui.set_cursor_screen_pos(p)
         imgui.dummy(ImVec2(w, h))
@@ -2645,7 +3257,11 @@ class App:
 
     def _confirm_cancel(self):
         t = theme_mod.current()
-        if imgui.begin_popup_modal("cancel?", None,
+        vp = imgui.get_main_viewport()
+        imgui.set_next_window_pos(
+            ImVec2(vp.pos.x + vp.size.x * 0.5, vp.pos.y + vp.size.y * 0.5),
+            imgui.Cond_.appearing, ImVec2(0.5, 0.5))
+        if imgui.begin_popup_modal("Cancel print###askcancel", None,
                                    imgui.WindowFlags_.always_auto_resize)[0]:
             imgui.text_colored(t.text, "Cancel the running print?")
             imgui.text_colored(t.text_mute, "This cannot be undone.")

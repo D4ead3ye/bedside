@@ -197,7 +197,8 @@ the corner of the view.
 ## 6. Side panel
 
 Five sections, **each independently switchable**: temperature cards,
-temperature graph, controls, job buttons, model card.
+temperature graph, controls, job buttons, model card — plus the
+movement pad, which appears only when it is both enabled and safe.
 
 - **Temperature cards** — tracked caps label, big readout with the unit set
   small and dim beside it, feature icon, heat-up meter, and a **sparkline
@@ -211,13 +212,50 @@ temperature graph, controls, job buttons, model card.
   on the leading cell, footprint and current feature. Heights snap to whole
   rows (104/78/60px) rather than interpolating, because interpolating clips the
   last line of text and reads as a broken card.
+- **Movement pad** — an optional sixth section, off by default. Locked, it is
+  a single bar that fills as you hold it; armed, it grows a step-size row, a
+  cross pad and a Z column set apart from it, and the header counts down the
+  20 seconds until it re-locks. The centre of the cross is an inert readout
+  rather than a button, because that square is where a slipped cursor lands.
+  Two layouts — the cross above 176px of panel height, a paired single row
+  below it — so the card is never the thing that clips.
 - **Splitter** — a hairline that fades out at both ends with a grip at the
   middle, draggable to resize the panel. Ten pixels of gap was a gap, not a
   division.
 
 ---
 
-## 7. Motion and feedback
+## 7. The file browser
+
+`Ctrl+O`. A full screen rather than a panel section, because here the list
+is the content rather than an instrument beside it.
+
+- **Rows as cards**, not a table: the name on the semibold face, a muted
+  metadata line under it (folder, size, estimated time, age), and a feature
+  icon that swaps to the printer glyph with a green accent edge on the file
+  currently being printed.
+- **Actions live on the row**, right-aligned. Where one cannot act it is
+  **not a disabled button but an inert dim glyph** — no id taken, no press
+  state, and it still explains itself on hover. A button that looks live and
+  then declines is at its worst on exactly the row that matters.
+- **Worker strip** above the list: a gradient plate carrying what the
+  background thread is doing, a percentage, and a hairline fill along its
+  bottom edge. It turns `t.danger` and holds the message when something
+  fails.
+- **Storage** right-aligned on the title row, in `t.warn` past 92% full.
+- **One ground either way** — the empty state draws inside the same child as
+  the list, so the screen does not swap its whole background depending on how
+  many files the printer happens to have.
+- **Confirm dialogs** centred on the viewport and titled through `###`, so
+  the popup id stops leaking into the title bar. Each names the file and what
+  it will cost.
+- **`PREVIEW` badge** over the top-left of the 3D view whenever it is showing
+  a file that is not the running job, with its own close box. It stands down
+  by itself the moment the printer starts a job.
+
+---
+
+## 8. Motion and feedback
 
 - **Print progress hairline** along the very top edge of the window, full width,
   with a bloom on the leading edge. The one number worth seeing from across the
@@ -232,7 +270,7 @@ temperature graph, controls, job buttons, model card.
 
 ---
 
-## 8. Sound — `bedside/sounds.py`
+## 9. Sound — `bedside/sounds.py`
 
 Visual's sibling, and the same idea: the toolkit's cues are tonal, which is what
 makes a cue read as a knock. Right for a tool you click through, wrong for
@@ -251,7 +289,7 @@ something open beside you for nine hours.
 
 ---
 
-## 9. Every knob
+## 10. Every knob
 
 | group | controls |
 | --- | --- |
@@ -263,6 +301,7 @@ something open beside you for nine hours.
 | Panel | card style, shadow, 5 section toggles, side-panel width, terminal height, graph height |
 | Terminal | follow, 5 noise filters, text filter, scroll speed, mono, timestamps, tags, row spacing |
 | Alerts | sounds on, volume, cue set, custom cue folder, desktop toasts |
+| Printer | movement controls on/off (the only setting that adds a control rather than restyling one) |
 
 Settings live across six tabs — Appearance, 3D View, Terminal, Alerts, Printer,
 About — and the Printer tab opens with a **live miniature of your whole window**
@@ -271,7 +310,7 @@ at once.
 
 ---
 
-## 10. Changes that live in VertexUI
+## 11. Changes that live in VertexUI
 
 Two, both in `vertexui/toasts.py`, and Bedside depends on both:
 

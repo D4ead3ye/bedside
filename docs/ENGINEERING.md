@@ -959,6 +959,75 @@ bedside/effects.py  ambient particles, behind and over the UI
 tools/makeicon.py    regenerates assets/icon.png, .ico and app_settings/
 ```
 
+## Sending files
+
+### requests sends two framing headers at once
+
+Uploading with `files=` builds the entire multipart body in memory before
+anything leaves, so a 120 MB sliced file costs 120 MB of body on top of the
+120 MB already read, and there is no progress to report because the body is
+finished before the first byte goes out. So the envelope is written by
+hand and the body is a generator.
+
+That swapped one problem for a quieter one. `requests` picks its framing by
+calling `super_len()` on the body; a bare generator has no length, so it
+adds `Transfer-Encoding: chunked` — **in addition to** the `Content-Length`
+already set in the headers, rather than instead of it. Both framings on one
+request is a combination RFC 9112 resolves in favour of chunked and that
+proxies are entitled to reject outright, which would have shown up as
+uploads that work against a bare OctoPrint and fail behind nginx.
+
+A local server that re-parses the request with the stdlib's own multipart
+parser caught it: `Transfer-Encoding` present, `Content-Length` present,
+payload byte-identical anyway because the stdlib honoured the length. The
+fix is not to strip the header afterwards but to give the body a `__len__`,
+so requests takes the other branch on its own:
+
+```python
+class _SizedBody:
+    def __len__(self):  return self._len
+    def __iter__(self): return self._make()
+```
+
+### The file dialog does not belong on the draw thread
+
+`GetOpenFileNameW` is modal and stays open as long as somebody takes to
+find a file. On the draw thread that is a frozen window with a stalled
+shader backdrop behind it. It runs on a worker instead, with our own window
+passed as `hwndOwner`: the dialog still disables the owner for its
+duration, so the app keeps animating but correctly refuses input. The
+worker calls `CoInitializeEx` first, because the shell namespace extensions
+inside the dialog are COM objects and that thread has never initialised it.
+
+Drag-and-drop was considered and dropped. hello_imgui exposes no drop
+callback, the `glfw` Python package is not installed, and the Win32 route
+means subclassing the window proc that GLFW owns — a crash risk in a
+released app for a convenience the Open dialog already covers.
+
+### Popups opened inside a child window
+
+`open_popup` and `begin_popup_modal` have to meet in the same ID stack.
+Calling both inside the list's `begin_child` lines up and *looks* fine, but
+the modal is then parented to a scrolling region: it clips at the child's
+edge and scrolls with the content. The row loop now only records which
+entry was asked about, and the dialog is raised after `end_child`.
+
+The popup name is also its window title, so `"start print?"` was showing up
+in the title bar. Everything after `###` is id-only, which lets the visible
+half be written for a person: `"Start print###askprint"`. The pre-existing
+cancel dialog had the same slip and was fixed with it.
+
+### A disabled icon button, where there isn't one
+
+`widgets.icon_button` has no disabled state, and the first version simply
+ignored the click while still drawing a live-looking button — worst of all
+on the row being printed, where the two buttons you must not press looked
+exactly like the ones you may. Where an action is unavailable the button is
+now not submitted at all: the glyph is painted at 30% `text_mute`, takes no
+id, and still explains itself on hover through `is_mouse_hovering_rect`.
+
+---
+
 ## Known gaps
 
 - The CPU fallback still sorts whole pieces rather than pixels, so on a
@@ -968,4 +1037,8 @@ tools/makeicon.py    regenerates assets/icon.png, .ico and app_settings/
 - No webcam pane yet — it needs an MJPEG decode into a GL texture, which is
   a different job from everything else here.
 - Single printer.
+- No folder creation or rename in the file browser, and uploads all land at
+  the storage root. Both are `/api/files` calls away; neither has come up.
+- The file dialog is `comdlg32`, so the browser's upload button is
+  Windows-only even though everything it does afterwards is not.
 - `toasts` and `sound` are Windows-only; the rest is cross-platform.
