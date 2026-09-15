@@ -31,10 +31,13 @@ from bedside import app as A                                # noqa: E402
 from bedside.client import Snapshot                         # noqa: E402
 from bedside.gcode import parse                             # noqa: E402
 
-WIN = (1240, 860)
-OUT_W = 620
-FRAMES = 48
-DELAY_CS = 8                 # 80 ms a frame, 12.5 fps
+# Record close to the size it will be shown at. A 2x downscale turns 12px
+# UI text into mush — the app's own name in the topbar stopped being
+# readable, which rather defeats a spotlight.
+WIN = (1100, 860)
+OUT_W = 880
+FRAMES = 36
+DELAY_CS = 10                # 100 ms a frame, 10 fps
 GRID_PERIOD = 1.0 / 0.45     # the grid scene scrolls at t * 0.45
 BG_SECONDS = GRID_PERIOD * 2
 
@@ -107,6 +110,21 @@ def record(gcode_path):
         return real_render(w, h, t, *a, **kw)
 
     app.bg.render = looped
+
+    # The camera is eased, so setting `view.yaw` sets a target the render
+    # chases and never catches. Over a loop that costs the last slice of
+    # the turn AND leaves the first frames rotating slower than the rest,
+    # so the model visibly jumps back at the seam. For a recording the
+    # yaw wants to be exactly what was asked for, so it is passed through.
+    from vertexui import anim as _anim
+    _real_to = _anim.to
+
+    def _exact(key, target, speed=14.0):
+        if key.endswith(":yaw"):
+            return target
+        return _real_to(key, target, speed)
+
+    _anim.to = _exact
 
     params = hello_imgui.RunnerParams()
     params.app_window_params.window_title = "Bedside"
