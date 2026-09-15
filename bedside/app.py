@@ -1117,6 +1117,26 @@ class App:
         self._confirm_print(snap)
         self._confirm_delete()
 
+    def _dialog_subject(self, name):
+        """The file a dialog is about: an accent bar, then the name.
+
+        Drawn rather than `text_colored` so the bar and the name share a
+        baseline. The name is `text`, never `accent` — see the note on
+        contrast in docs/ENGINEERING.md.
+        """
+        t = theme_mod.current()
+        dl = imgui.get_window_draw_list()
+        shown = name if len(name) <= 52 else name[:51] + "\u2026"
+        p = imgui.get_cursor_screen_pos()
+        with fonts.use("semi"):
+            h = imgui.get_text_line_height()
+            dl.add_rect_filled(ImVec2(p.x, p.y + 1),
+                               ImVec2(p.x + 3.0, p.y + h - 1),
+                               imgui.get_color_u32(t.accent), 1.5)
+            dl.add_text(ImVec2(p.x + 11.0, p.y),
+                        imgui.get_color_u32(t.text), shown)
+            imgui.dummy(ImVec2(11.0 + imgui.calc_text_size(shown).x, h))
+
     def _confirm_print(self, snap):
         """Starting a print is the most expensive click in the app."""
         t = theme_mod.current()
@@ -1138,9 +1158,9 @@ class App:
             with fonts.use("semi"):
                 imgui.text_colored(t.text, "Send this to the printer?")
             imgui.dummy(ImVec2(0, 6))
-            imgui.text_colored(t.accent, e.display[:52])
+            self._dialog_subject(e.display)
             imgui.text_colored(
-                t.text_mute,
+                t.text_dim,
                 f"{e.size_text()}   ·   about {e.est_text()}")
             imgui.dummy(ImVec2(0, 4))
             # Re-checked here, not just where the button was drawn: the
@@ -1150,7 +1170,7 @@ class App:
                 imgui.text_colored(t.danger,
                                    "The printer is no longer idle.")
             else:
-                imgui.text_colored(t.text_mute,
+                imgui.text_colored(t.text_dim,
                                    "Make sure the bed is clear.")
             imgui.dummy(ImVec2(0, 10))
             if widgets.button("Start print", 150, height=30.0, primary=True,
@@ -1187,8 +1207,8 @@ class App:
             with fonts.use("semi"):
                 imgui.text_colored(t.text, "Delete from the printer?")
             imgui.dummy(ImVec2(0, 6))
-            imgui.text_colored(t.accent, e.display[:52])
-            imgui.text_colored(t.text_mute,
+            self._dialog_subject(e.display)
+            imgui.text_colored(t.text_dim,
                                "This removes it from the printer's storage. "
                                "The copy on this PC is untouched.")
             imgui.dummy(ImVec2(0, 10))

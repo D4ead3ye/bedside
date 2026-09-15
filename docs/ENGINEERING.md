@@ -1017,6 +1017,35 @@ in the title bar. Everything after `###` is id-only, which lets the visible
 half be written for a person: `"Start print###askprint"`. The pre-existing
 cancel dialog had the same slip and was fixed with it.
 
+### The accent is a setting, so it cannot carry meaning alone
+
+The confirm dialogs first drew the filename — the one fact the dialog
+exists to convey — in `t.accent`. Measured against the popup ground:
+
+| colour | on `surface` `#16161A` | |
+| --- | --- | --- |
+| `accent` (shipped `noir-red`) | 3.70:1 | fails AA |
+| `accent` (a dark user pick) | 1.35:1 | invisible |
+| `text_mute` | 2.38:1 | fails AA |
+| `text_dim` | 4.76:1 | AA |
+| `text` | 15.05:1 | AAA |
+
+So it failed the 4.5:1 floor *before* anyone touched the theme, and the
+accent is a user setting: any sufficiently dark pick takes the filename to
+the point of vanishing, which is what prompted the report. Read off the
+rendered frame rather than the palette, the filename was at **1.45:1**.
+
+The fix is not a brighter accent — `accent_bright` is only 5.32:1 on the
+shipped theme and is equally free to be dark. It is that **critical text
+does not get its colour from a setting at all**. The filename is now `text`
+(measured **16.07:1** on the same frame), with the accent kept as a 3px bar
+beside it: a bar is not text, the non-text threshold is 3:1, and 3.70:1
+clears it. Supporting lines moved `text_mute` → `text_dim`.
+
+The rule this leaves behind: `accent` is for shapes, fills, and text you
+could delete without losing information. Anything the user has to *read* to
+make a decision is `text` or `text_dim`.
+
 ### A disabled icon button, where there isn't one
 
 `widgets.icon_button` has no disabled state, and the first version simply
