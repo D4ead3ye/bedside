@@ -97,6 +97,8 @@ to ruin a nine-hour print. `Ctrl+O` only opens a list.
 everything on the card with its size, estimated time and age, newest first,
 with a filter box for when there are a lot of them.
 
+![The Files screen](docs/files.png)
+
 - **Upload** picks one or more sliced `.gcode` files through the ordinary
   Windows dialog and streams them up with a progress bar. The request body
   is a generator, so a 120 MB file does not also become 120 MB of request
