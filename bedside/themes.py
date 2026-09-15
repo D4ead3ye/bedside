@@ -13,23 +13,20 @@ from vertexui import theme as theme_mod
 
 rgb = theme_mod.rgb
 
-# A deep twilight violet on the noir chassis. The accent is much darker
-# than the other presets' — it works as a fill, where light text sits on
-# top of it at 11.5:1, and not at all as text, where it is 1.45:1 on the
-# window ground. That is the split the app already respects: `accent` for
-# fills and shapes, `accent_bright` for anything accent-coloured that has
-# to be read.
+# A violet on the noir chassis, at the same hue (262°) as the deeper
+# #37186E it started as but taken up to V=93%, which puts it in the same
+# brightness band as the other presets' accents rather than well below
+# them. Light text on it lands at 4.75:1, so a primary button reads.
 #
-# `accent_bright` is set to a genuinely bright value at the same hue rather
-# than a multiple of the accent, because scaling a V=43% colour upward by
-# the ratio the other presets use lands somewhere still too dark to
-# highlight anything.
+# `accent_bright` and `accent_dim` keep roughly the value relationship
+# noir-red uses between the three — bright a little lighter and less
+# saturated, dim at about 0.42 of the accent's value.
 NOIR_IRIS = replace(
     theme_mod.BUILTIN["noir-red"],
     name="noir-iris",
-    accent=rgb("#37186E"),
-    accent_bright=rgb("#8D4DFF"),
-    accent_dim=rgb("#1E0D3D"),
+    accent=rgb("#7C3AED"),
+    accent_bright=rgb("#9E65FF"),
+    accent_dim=rgb("#321564"),
 )
 
 EXTRA = {"noir-iris": NOIR_IRIS}

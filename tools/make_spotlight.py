@@ -94,6 +94,13 @@ def record(gcode_path):
     app.right_w, app.log_h, app.graph_h = 372.0, 150.0, 120.0
     app.panel_show = {k: True for k in A.PANEL_SECTIONS}
 
+    # Pinned, not inherited. `A.App()` loads the author's settings.json,
+    # so without this the showcase is whatever theme and accent happen to
+    # be on the machine that records it.
+    app.st.theme_name = "noir-iris"
+    app.st.accent = ""
+    app.st.extras["bg_scrim"] = 0.62
+
     app.bg.set("grid")
     app.bg.intensity = 1.25
     app.fx.set("none")
@@ -170,8 +177,13 @@ def record(gcode_path):
 
     import vertexui as vui
     A._use_our_assets()
-    vui.install(params, theme_=app.st.build_theme(),
+    # Mirror main(): readable() at install and _apply_theme on post_init.
+    # Without both, the recording shows a palette the app never renders —
+    # notably the pre-0.2.2 text ramp, which is most of what a viewer is
+    # looking at.
+    vui.install(params, theme_=A.readable(app.st.build_theme()),
                 faces=A.build_faces(app.st.extras))
+    params.callbacks.post_init = app._apply_theme
     hello_imgui.run(params)
     return state["frames"]
 
